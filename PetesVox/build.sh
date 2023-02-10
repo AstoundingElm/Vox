@@ -1,1 +1,4 @@
-g++ -g -Wextra -Wall -pedantic main.cpp -lsfml-graphics -lsfml-window -lsfml-system -lglfw -lGLEW -lGL -o Vox
+g++ -g  main.cpp -lsfml-graphics -lsfml-window -lsfml-system  -lGLEW  -lGL -o Vox
+
+
+#-Wextra -Wall -pedantic
