@@ -1,132 +1,266 @@
 #include <GL/glew.h>
-#include <GLFW/glfw3.h>
+#include <SFML/OpenGL.hpp>
 #include <SFML/Window.hpp>
 #include <SFML/Graphics.hpp>
+
+
+#include <string>
+#include <fstream>
+#include <ostream>
+#include <iostream>
+#include <vector>
+#include <algorithm>
+#include <map>
+
 
 #include <glm/glm.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-
+#include "Window.h"
+#include "Math.h"
 #include "defines.h"
-#define NUM_SHADERS 2U
+#include "Camera.h"
+#include "Shader.h"
+#include "Entity.h"
+#include "Texture.h"
 
-GLuint m_program;
-GLuint m_shaders[NUM_SHADERS];
-
-char* loadShader(const char* fileName)
+void bind(Shader*shader)
 {
-	FILE* fp;
-	long size = 0;
-	char* shaderContent;
-	
-	fp = fopen(fileName, "rb");
-	if(fp == NULL) {
-        exit(-1);
-    }
-    fseek(fp, 0, SEEK_END);
-    size = ftell(fp)+1;
-    fclose(fp);s
-		
-		
-		fp = fopen(fileName, "r");
-	
-	shaderContent = (char*)memset(malloc(size), '\0', size);
-    fread(shaderContent, 1, size-1, fp);
-    fclose(fp);
-	
-    return shaderContent;
+	glUseProgram(shader->m_program);
 };
+int getUniformLocation(Shader* shader, std::string uniform_name);
+
+
+void loadMatrix(int location, const glm::mat4x4 & matrix)
+{
+    glUniformMatrix4fv(location, 1, GL_FALSE, glm::value_ptr(matrix));
+}
+
+
+void unbind()
+{
+	glUseProgram(0);
+}
+#include "Cube.h"
+
+#include "Chunk.h"
+#include "Ray.h"
 
 glm::mat4x4 static createProjectionMatrix(glm::vec2 screenSize, float FOV, float NEAR_PLANE, float FAR_PLANE)
 {
 	return glm::perspective(glm::radians(FOV), (screenSize.x / screenSize.y), NEAR_PLANE, FAR_PLANE);
 }
 
-
-GLuint createShader(const char* text, unsigned int type)
+int getUniformLocation(Shader* shader, std::string uniform_name)
 {
-	GLuint shader = glCreateShader(type);
-	if(shader == 0)
-		PERROR("Failed to load shader");
-	
-	glShaderSource(shader, 1, &text, NULL );
-	glCompileShader(shader);
-	
-	return shader;
+    if (shader->m_uniformLocations.find(uniform_name) == shader->m_uniformLocations.end())
+    {
+        std::cout << "Found no location for the uniform: " << uniform_name << "\n";
+        return -1;
+    }
+    else
+        return shader->m_uniformLocations.at(uniform_name);
 }
-
-void createProgram(const char* vertFileName, const char * fragFileName)
-{
-	m_program = glCreateProgram();
-	m_shaders[0] = createShader(loadShader(vertFileName), GL_VERTEX_SHADER);
-	m_shaders[1] = createShader(loadShader(fragFileName), GL_FRAGMENT_SHADER);
-	
-	for (unsigned int i = 0; i < NUM_SHADERS; i++)
-        glAttachShader(m_program, m_shaders[i]);
-	
-	glBindAttribLocation(m_program, 0, "position");
-	glBindAttribLocation(m_program, 1, "textureCoords");
-	
-	glLinkProgram(m_program);
-    glValidateProgram(m_program);
-};
-
-GLuint texture;
-
-void loadMatrix(int location, const glm::mat4x4  matrix)
-{
-    glUniformMatrix4fv(location, 1, GL_FALSE, glm::value_ptr(matrix));
-}
-
-
 int main()
 {
 	
-	sf::Window m_window;
-	
-	sf::ContextSettings settings;
-	settings.depthBits = 24;
-	settings.stencilBits = 8;
-	
-	m_window.create(sf::VideoMode(800, 600), "Vox", sf::Style::Default, settings);
-	
-	
-	m_window.setVerticalSyncEnabled(true);
 	glewInit();
+    Window window(1280, 720, "My window");
+    window.EnableVSync(true);
 	
-	createProgram("shader1.vert", "shader1.frag");
+	Shader shader;
+    shader.setAttribute(0, "position");
+    shader.setAttribute(1, "textureCoords");
+    
+    shader.createProgram("shader1");
 	
-	createProgram("simple_colour.vert", "simple_colour.frag");
+    shader.setUniformLocation("transformationMatrix");
+    shader.setUniformLocation("projectionMatrix");
+    shader.setUniformLocation("viewMatrix");
 	
-	sf::Image image;
+	Shader simple_shader;
+    simple_shader.setAttribute(0, "position");
 	
-	if(!image.loadFromFile("tex1.png"))
-	{
-		PERROR("Failed to load texture here");
+    simple_shader.createProgram("simple_colour");
+	
+    simple_shader.setUniformLocation("transformationMatrix");
+    simple_shader.setUniformLocation("projectionMatrix");
+    simple_shader.setUniformLocation("viewMatrix");
+	
+	Texture texture;
+    texture.loadTexture("tex1.png");
+	
+    glm::mat4 projectionMatrix = createProjectionMatrix(glm::vec2(window.ScreenWidth(), window.ScreenHeight()), 90, 0.1, 1000);
+	
+    shader.Bind();
+    shader.loadMatrix(shader.getUniformLocation("projectionMatrix"), projectionMatrix);
+    shader.Unbind();
+	
+    simple_shader.Bind();
+    simple_shader.loadMatrix(simple_shader.getUniformLocation("projectionMatrix"), projectionMatrix);
+    simple_shader.Unbind();
+	
+    Camera camera;
+	
+    // Used when the player presses left mouse click
+    glm::vec3 rayLastPosition;
+	
+    // Displays a border of white lines around the current looking block
+    Entity selectedBlockBox;
+	
+    ChunkManager chunk_manager;
+    chunk_manager.generate(2, 1, 2);
+    
+    bool wireframe = false;
+    bool running = true;
+    while (running)
+    {
+        sf::Event e;
+        while (window.getWindow()->pollEvent(e))    
+        {
+            if (e.type == sf::Event::Closed)
+                running = false;
+            if (e.type == sf::Event::Resized)
+                glViewport(0, 0, e.size.width, e.size.height);
+            if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Q)
+                running = false;
+			
+            if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Tab)
+            {
+                wireframe = !wireframe;
+                if (wireframe) window.EnableWireframe(true);
+                else           window.EnableWireframe(false);
+            }
+			
+            if (e.type == sf::Event::MouseButtonPressed && e.mouseButton.button == sf::Mouse::Left)
+            {
+                // Raycasting
+                int x = rayLastPosition.x;
+                int y = rayLastPosition.y;
+                int z = rayLastPosition.z;
+				
+                if (chunk_manager.getBlock(x, y, z))
+                {
+                    chunk_manager.setBlock(x, y, z, 0);
+                    chunk_manager.getChunkFromWorldPosition(x, y, z)->Update();
+                }
+            }
+        }
 		
+        //////////////////////////////
+        //        RayTracing        //
+        /////////////////////////////
+        for (Ray ray(camera.getPosition(), camera.getRotation()); ray.getLength() < 6; ray.step(0.05f))
+        {
+            glm::vec3 position = ray.getEnd();
+            //printf("%f, %f, %f\n\n", position.x, position.y, position.z);
+			
+            int x = static_cast<int>(position.x);
+            int y = static_cast<int>(position.y);
+            int z = static_cast<int>(position.z);
+			
+            // Don't check the ray if we are outside of the chunks
+            int w = chunk_manager.getChunksSize().x;
+            int h = chunk_manager.getChunksSize().y;
+            int d = chunk_manager.getChunksSize().z;
+			
+            if (x >= 0 && y >= 0 && z >= 0 && x < Width * w && y < Height * h && z < Depth * d)
+            {
+                if (chunk_manager.getBlock(x, y, z))
+                {
+                    rayLastPosition = glm::vec3(x, y, z);
+                    
+                    float bx = x;
+                    float by = y;
+                    float bz = z;
+					
+                    // Create block box border
+                    std::vector<GLfloat> linePoints = {
+                        bx + 0, by + 0, bz + 0,
+                        bx + 1, by + 0, bz + 0,
+                        bx + 0, by + 1, bz + 0,
+                        bx + 1, by + 1, bz + 0,
+                        bx + 0, by + 0, bz + 1,
+                        bx + 1, by + 0, bz + 1,
+                        bx + 0, by + 1, bz + 1,
+                        bx + 1, by + 1, bz + 1,
+						
+                        bx + 0, by + 0, bz + 0,
+                        bx + 0, by + 1, bz + 0,
+                        bx + 1, by + 0, bz + 0,
+                        bx + 1, by + 1, bz + 0,
+                        bx + 0, by + 0, bz + 1,
+                        bx + 0, by + 1, bz + 1,
+                        bx + 1, by + 0, bz + 1,
+                        bx + 1, by + 1, bz + 1,
+						
+                        bx + 0, by + 0, bz + 0,
+                        bx + 0, by + 0, bz + 1,
+                        bx + 1, by + 0, bz + 0,
+                        bx + 1, by + 0, bz + 1,
+                        bx + 0, by + 1, bz + 0,
+                        bx + 0, by + 1, bz + 1,
+                        bx + 1, by + 1, bz + 0,
+                        bx + 1, by + 1, bz + 1,
+						
+                    };
+					
+                    if (selectedBlockBox.VBOs.empty()) selectedBlockBox.setVBO(linePoints, 0, 3);
+                    else                               selectedBlockBox.VBOs[0]->setData(linePoints, 0, 3);
+					
+                    break;
+                }
+            }
+        }
 		
-	}
-	
-	glGenTextures(1, &texture);
-	glBindTexture(GL_TEXTURE_2D, texture);
-	
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.getSize().x, image.getSize().y, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.getPixelsPtr());
-	
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-	
-	glm::mat4 projectionMatrix = createProjectionMatrix(glm::vec2(WIDTH, HEIGHT), 90, 0.1, 1000);
-	
-	glUseProgram(m_program);
-	loadMatrix(0, projectionMatrix);
-	glUseProgram(0);
-	
-	
-	puts("We reached herer fine");
+        sf::Time elapsed = window.calculateElapsedTime();
+        window.EnableFPSCounter();
+		
+        window.clear();
+		
+        camera.Update(elapsed, window.getWindow());
+		
+        // ...Drawing
+        auto Draw = [&](Entity* entity,  Shader* shader,  Texture* texture)
+        {
+            shader->Bind();
+			
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, texture->texture);
+			
+            shader->loadMatrix(shader->getUniformLocation("viewMatrix"), createViewMatrix(&camera));
+            entity->VAO.Bind();
+			
+            shader->loadMatrix(shader->getUniformLocation("transformationMatrix"), createTransformationMatrix(entity->position, entity->rotation, entity->scale));
+			
+            glDrawElements(GL_TRIANGLES, entity->EBO.size, GL_UNSIGNED_INT, 0);
+            entity->VAO.Unbind();
+			
+            shader->Unbind();
+        };
+		
+        // Render the chunk
+        chunk_manager.render(&shader, &texture, &camera);
+		
+        // Draw the border box of current voxel
+        simple_shader.Bind();
+        simple_shader.loadMatrix(simple_shader.getUniformLocation("viewMatrix"), createViewMatrix(&camera));
+		
+        selectedBlockBox.VAO.Bind();
+		
+        simple_shader.loadMatrix(simple_shader.getUniformLocation("transformationMatrix"), createTransformationMatrix({0, 0, 0}, { 0, 0, 0 }, { 1, 1, 1 }));
+		
+        glLineWidth(5);
+        glDrawArrays(GL_LINES, 0, 72);
+		
+        selectedBlockBox.VAO.Unbind();
+        simple_shader.Unbind();
+        
+        window.display();
+		// sleep(0.1f);
+		
+    }
 	
 	return 0;
 }
-

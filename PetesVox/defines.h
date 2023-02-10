@@ -12,5 +12,5 @@
 
 #define PERROR(msg) fprintf(stderr, msg);
 
-#define WIDTH 800
-#define HEIGHT 600
+int WIDTH = 800;
+int HEIGHT =  600;
